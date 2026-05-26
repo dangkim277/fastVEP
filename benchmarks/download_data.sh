@@ -60,6 +60,8 @@ index_fasta() {
 # ═══════════════════════════════════════════════════════════════
 ENSEMBL_RELEASE=115
 ENSEMBL_FTP="https://ftp.ensembl.org/pub/release-${ENSEMBL_RELEASE}"
+ENSEMBL_GENOMES_RELEASE=62
+ENSEMBL_PLANTS_FTP="https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/release-${ENSEMBL_GENOMES_RELEASE}"
 
 download_human_ref() {
     echo -e "\n${BOLD}Human (GRCh38, Ensembl ${ENSEMBL_RELEASE})${NC}"
@@ -127,14 +129,13 @@ download_elegans_ref() {
 }
 
 download_arabidopsis_ref() {
-    echo -e "\n${BOLD}Arabidopsis (TAIR10, Ensembl Plants ${ENSEMBL_RELEASE})${NC}"
-    local PLANTS_FTP="https://ftp.ensemblgenomes.org/pub/plants/release-${ENSEMBL_RELEASE}"
-    download "${PLANTS_FTP}/gff3/arabidopsis_thaliana/Arabidopsis_thaliana.TAIR10.${ENSEMBL_RELEASE}.gff3.gz" \
+    echo -e "\n${BOLD}Arabidopsis (TAIR10, Ensembl Plants ${ENSEMBL_GENOMES_RELEASE})${NC}"
+    download "${ENSEMBL_PLANTS_FTP}/gff3/arabidopsis_thaliana/Arabidopsis_thaliana.TAIR10.${ENSEMBL_GENOMES_RELEASE}.gff3.gz" \
         "$ORG_DATA/arabidopsis.gff3.gz"
     decompress "$ORG_DATA/arabidopsis.gff3.gz"
-    [[ -f "$ORG_DATA/arabidopsis.gff3" ]] || mv "$ORG_DATA/Arabidopsis_thaliana.TAIR10.${ENSEMBL_RELEASE}.gff3" "$ORG_DATA/arabidopsis.gff3" 2>/dev/null || true
+    [[ -f "$ORG_DATA/arabidopsis.gff3" ]] || mv "$ORG_DATA/Arabidopsis_thaliana.TAIR10.${ENSEMBL_GENOMES_RELEASE}.gff3" "$ORG_DATA/arabidopsis.gff3" 2>/dev/null || true
 
-    download "${PLANTS_FTP}/fasta/arabidopsis_thaliana/dna/Arabidopsis_thaliana.TAIR10.dna.toplevel.fa.gz" \
+    download "${ENSEMBL_PLANTS_FTP}/fasta/arabidopsis_thaliana/dna/Arabidopsis_thaliana.TAIR10.dna.toplevel.fa.gz" \
         "$ORG_DATA/arabidopsis.fa.gz"
     decompress "$ORG_DATA/arabidopsis.fa.gz"
     index_fasta "$ORG_DATA/arabidopsis.fa"
@@ -181,8 +182,7 @@ download_elegans_vcf() {
 
 download_arabidopsis_vcf() {
     echo -e "\n${BOLD}Arabidopsis VCF: 1001 Genomes Project (TAIR10)${NC}"
-    local PLANTS_FTP="https://ftp.ensemblgenomes.org/pub/plants/release-${ENSEMBL_RELEASE}"
-    download "${PLANTS_FTP}/variation/vcf/arabidopsis_thaliana/arabidopsis_thaliana.vcf.gz" \
+    download "${ENSEMBL_PLANTS_FTP}/variation/vcf/arabidopsis_thaliana/arabidopsis_thaliana.vcf.gz" \
         "$VCF_DATA/arabidopsis_ensembl.vcf.gz"
 }
 
@@ -213,26 +213,26 @@ subset_vcf() {
 prepare_benchmark_vcfs() {
     echo -e "\n${BOLD}Preparing benchmark VCF subsets...${NC}"
 
-    # Human: extract chr22 and full subsets from GIAB
-    if [[ -f "$VCF_DATA/human_giab_HG002.vcf.gz" ]]; then
-        subset_vcf "$VCF_DATA/human_giab_HG002.vcf.gz" "$VCF_DATA/human_100k.vcf" 100000
-        subset_vcf "$VCF_DATA/human_giab_HG002.vcf.gz" "$VCF_DATA/human_500k.vcf" 500000
-        # Full VCF (decompress all)
-        if [[ ! -f "$VCF_DATA/human_giab_full.vcf" ]]; then
-            echo -e "  Decompressing full GIAB VCF..."
-            zcat "$VCF_DATA/human_giab_HG002.vcf.gz" > "$VCF_DATA/human_giab_full.vcf"
-        fi
-    fi
+    # # Human: extract chr22 and full subsets from GIAB
+    # if [[ -f "$VCF_DATA/human_giab_HG002.vcf.gz" ]]; then
+    #     subset_vcf "$VCF_DATA/human_giab_HG002.vcf.gz" "$VCF_DATA/human_100k.vcf" 100000
+    #     subset_vcf "$VCF_DATA/human_giab_HG002.vcf.gz" "$VCF_DATA/human_500k.vcf" 500000
+    #     # Full VCF (decompress all)
+    #     if [[ ! -f "$VCF_DATA/human_giab_full.vcf" ]]; then
+    #         echo -e "  Decompressing full GIAB VCF..."
+    #         zcat "$VCF_DATA/human_giab_HG002.vcf.gz" > "$VCF_DATA/human_giab_full.vcf"
+    #     fi
+    # fi
 
     # Mouse
-    if [[ -f "$VCF_DATA/mouse_mgp.vcf.gz" ]]; then
-        subset_vcf "$VCF_DATA/mouse_mgp.vcf.gz" "$VCF_DATA/mouse_100k.vcf" 100000
-        subset_vcf "$VCF_DATA/mouse_mgp.vcf.gz" "$VCF_DATA/mouse_500k.vcf" 500000
-    fi
+    # if [[ -f "$VCF_DATA/mouse_mgp.vcf.gz" ]]; then
+    #     subset_vcf "$VCF_DATA/mouse_mgp.vcf.gz" "$VCF_DATA/mouse_100k.vcf" 100000
+    #     subset_vcf "$VCF_DATA/mouse_mgp.vcf.gz" "$VCF_DATA/mouse_500k.vcf" 500000
+    # fi
 
     # Yeast
     if [[ -f "$VCF_DATA/yeast_1002g.gvcf.gz" ]]; then
-        subset_vcf "$VCF_DATA/yeast_1002g.gvcf.gz" "$VCF_DATA/yeast_100k.vcf" 100000
+        subset_vcf "$VCF_DATA/yeast_1002g.gvcf.gz" "$VCF_DATA/yeast_4M.vcf" 4000000
     fi
 
     # Drosophila
@@ -297,7 +297,7 @@ for arg in "$@"; do
             ;;
         --human)      download_human_ref; download_human_vcf ;;
         --mouse)      download_mouse_ref; download_mouse_vcf ;;
-        --yeast)      download_yeast_ref; download_yeast_vcf ;;
+        --yeast)      download_yeast_ref; download_yeast_vcf ; prepare_benchmark_vcfs ;;
         --drosophila) download_drosophila_ref; download_drosophila_vcf ;;
         --elegans)    download_elegans_ref; download_elegans_vcf ;;
         --arabidopsis) download_arabidopsis_ref; download_arabidopsis_vcf ;;

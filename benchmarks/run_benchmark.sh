@@ -17,14 +17,16 @@
 #
 # Each benchmark: 3 runs, median reported, with binary transcript cache.
 #
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FASTVEP="$PROJECT_DIR/target/release/fastvep"
 OUTPUT_DIR="$SCRIPT_DIR/output"
-ORG_DATA="$PROJECT_DIR/test_data/organisms"
-HUMAN_DIR="$ORG_DATA/human"
+LOG_DIR="$OUTPUT_DIR/logs"
+TEST_DATA="$PROJECT_DIR/test_data"
+ORG_DATA="$TEST_DATA/organisms"
+VCF_DATA="$TEST_DATA/benchmark_vcfs"
 RUNS=3
 
 RED='\033[0;31m'
@@ -33,6 +35,26 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
+
+on_error() {
+    local exit_code="$?"
+    local line="${1:-unknown}"
+    local command="${2:-unknown}"
+    mkdir -p "$LOG_DIR"
+    {
+        echo ""
+        echo "== $(date '+%Y-%m-%d %H:%M:%S') benchmark script error =="
+        echo "exit_code: $exit_code"
+        echo "line:      $line"
+        echo "command:   $command"
+    } >> "$LOG_DIR/run_benchmark.error.log"
+    echo -e "\n${RED}ERROR:${NC} benchmark script failed at line $line" >&2
+    echo -e "${YELLOW}Command:${NC} $command" >&2
+    echo -e "${YELLOW}Log:${NC} $LOG_DIR/run_benchmark.error.log" >&2
+    exit "$exit_code"
+}
+
+trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
 
 print_header() {
     echo ""
@@ -59,7 +81,16 @@ build_release() {
 }
 
 count_variants() {
-    grep -c -v '^#' "$1"
+    awk 'BEGIN { n = 0 } !/^#/ { n++ } END { print n }' "$1"
+}
+
+now_ns() {
+    date +%s%N
+}
+
+elapsed_seconds() {
+    local start="$1" end="$2"
+    awk -v start="$start" -v end="$end" 'BEGIN { printf "%.4f", (end - start) / 1000000000 }'
 }
 
 time_run() {
@@ -68,6 +99,7 @@ time_run() {
     local fmt="$3"
     local outfile="$4"
     local fasta="${5:-}"
+    local log_file="$LOG_DIR/$(basename "$outfile").log"
 
     local fasta_args=()
     if [[ -n "$fasta" && -f "$fasta" ]]; then
@@ -75,18 +107,34 @@ time_run() {
     fi
 
     local start end
-    start=$(python3 -c 'import time; print(int(time.time()*1e9))')
-    "$FASTVEP" annotate \
+    mkdir -p "$LOG_DIR"
+    {
+        echo ""
+        echo "== $(date '+%Y-%m-%d %H:%M:%S') annotate $(basename "$input_vcf") =="
+        echo "input:  $input_vcf"
+        echo "gff3:   $gff3"
+        echo "fasta:  ${fasta:-none}"
+        echo "output: $outfile"
+    } >> "$log_file"
+
+    start=$(now_ns)
+    if ! "$FASTVEP" annotate \
         --input "$input_vcf" \
         --gff3 "$gff3" \
         "${fasta_args[@]}" \
         --output "$outfile" \
         --output-format "$fmt" \
         --hgvs \
-        2>/dev/null || true
-    end=$(python3 -c 'import time; print(int(time.time()*1e9))')
+        >> "$log_file" 2>&1; then
+        echo -e "\n${RED}ERROR:${NC} fastVEP annotate failed for $(basename "$input_vcf")" >&2
+        echo -e "${YELLOW}Log:${NC} $log_file" >&2
+        echo -e "${YELLOW}Last 40 log lines:${NC}" >&2
+        tail -n 40 "$log_file" >&2
+        return 1
+    fi
+    end=$(now_ns)
 
-    python3 -c "print(f'{($end - $start) / 1e9:.4f}')"
+    elapsed_seconds "$start" "$end"
 }
 
 median_time() {
@@ -94,14 +142,20 @@ median_time() {
     shift
     local times=()
     for ((r=1; r<=n; r++)); do
-        times+=( "$(time_run "$@")" )
+        local elapsed
+        if ! elapsed="$(time_run "$@")"; then
+            return 1
+        fi
+        times+=( "$elapsed" )
     done
-    printf '%s\n' "${times[@]}" | sort -n | python3 -c "
-import sys
-vals = [float(l) for l in sys.stdin]
-mid = len(vals) // 2
-print(f'{vals[mid]:.4f}')
-"
+    printf '%s\n' "${times[@]}" | sort -n | awk '
+        { vals[NR] = $1 }
+        END {
+            if (NR == 0) exit 1
+            mid = int(NR / 2) + 1
+            printf "%.4f", vals[mid]
+        }
+    '
 }
 
 warm_cache() {
@@ -132,8 +186,14 @@ warm_cache() {
         fasta_args="--fasta $fasta"
     fi
 
-    "$FASTVEP" annotate --input "$tmp_vcf" --gff3 "$gff3" $fasta_args \
-        --output /dev/null --output-format tab 2>/dev/null || true
+    mkdir -p "$LOG_DIR"
+    local log_file="$LOG_DIR/warm_cache_$(basename "$gff3").log"
+    if ! "$FASTVEP" annotate --input "$tmp_vcf" --gff3 "$gff3" $fasta_args \
+        --output /dev/null --output-format tab > "$log_file" 2>&1; then
+        echo -e "  ${RED}Cache warmup failed:${NC} $(basename "$gff3")" >&2
+        echo -e "  ${YELLOW}Log:${NC} $log_file" >&2
+        tail -n 40 "$log_file" >&2
+    fi
     rm -f "$tmp_vcf"
 
     if [[ -f "$cache_file" ]]; then
@@ -171,49 +231,40 @@ add_benchmark() {
 }
 
 run_benchmarks() {
-    mkdir -p "$OUTPUT_DIR"
+    mkdir -p "$OUTPUT_DIR" "$LOG_DIR"
 
-    # ── Yeast (R64, full genome — 260K Ensembl/SGD variants) ──
-    local YD="$ORG_DATA/yeast"
-    if [[ -f "$YD/yeast.gff3" ]]; then
-        print_section "Pre-warming: Yeast (R64)"
-        warm_cache "$YD/yeast.gff3" "$YD/yeast.fa"
-        add_benchmark "yeast_full" "$YD/yeast_ensembl_full.vcf" "$YD/yeast.gff3" "$YD/yeast.fa" "Yeast"
-    fi
+    # # ── Yeast (R64) ──
+    # if [[ -f "$ORG_DATA/yeast.gff3" ]]; then
+    #     print_section "Pre-warming: Yeast (R64)"
+    #     warm_cache "$ORG_DATA/yeast.gff3" "$ORG_DATA/yeast.fa"
+    #     add_benchmark "yeast_100k" "$VCF_DATA/yeast_100k.vcf" "$ORG_DATA/yeast.gff3" "$ORG_DATA/yeast.fa" "Yeast"
+    # fi
 
-    # ── Drosophila (BDGP6, full genome — 4.4M DGRP2 variants) ──
-    local DD="$ORG_DATA/drosophila"
-    if [[ -f "$DD/drosophila.gff3" ]]; then
-        print_section "Pre-warming: Drosophila (BDGP6)"
-        warm_cache "$DD/drosophila.gff3" "$DD/drosophila.fa"
-        add_benchmark "drosophila_full" "$DD/drosophila_dgrp2_full.vcf" "$DD/drosophila.gff3" "$DD/drosophila.fa" "Drosophila"
-    fi
+    # # # ── Mouse (GRCm39) ──
+    # # if [[ -f "$ORG_DATA/mouse.gff3" ]]; then
+    # #     print_section "Pre-warming: Mouse (GRCm39)"
+    # #     warm_cache "$ORG_DATA/mouse.gff3" "$ORG_DATA/mouse.fa"
+    # #     add_benchmark "mouse_100k" "$VCF_DATA/mouse_100k.vcf" "$ORG_DATA/mouse.gff3" "$ORG_DATA/mouse.fa" "Mouse"
+    # #     add_benchmark "mouse_500k" "$VCF_DATA/mouse_500k.vcf" "$ORG_DATA/mouse.gff3" "$ORG_DATA/mouse.fa" "Mouse"
+    # # fi
 
-    # ── Arabidopsis (TAIR10, full genome — 12.9M 1001 Genomes variants) ──
-    local AD="$ORG_DATA/arabidopsis"
-    if [[ -f "$AD/arabidopsis.gff3" ]]; then
-        print_section "Pre-warming: Arabidopsis (TAIR10)"
-        warm_cache "$AD/arabidopsis.gff3" "$AD/arabidopsis.fa"
-        add_benchmark "arabidopsis_full" "$AD/arabidopsis_1001g_full.vcf" "$AD/arabidopsis.gff3" "$AD/arabidopsis.fa" "Arabidopsis"
-    fi
-
-    # ── Mouse (GRCm39, full genome — 1M Ensembl/EVA variants) ──
-    local MD="$ORG_DATA/mouse"
-    if [[ -f "$MD/mouse.gff3" ]]; then
-        print_section "Pre-warming: Mouse (GRCm39)"
-        warm_cache "$MD/mouse.gff3" "$MD/mouse.fa"
-        add_benchmark "mouse_full" "$MD/mouse_ensembl_1m.vcf" "$MD/mouse.gff3" "$MD/mouse.fa" "Mouse"
-    fi
-
-    # ── Human (GRCh38, full genome — 4.05M GIAB HG002 variants) ──
-    local HD="$ORG_DATA/human"
-    local HUMAN_GFF3="$HD/Homo_sapiens.GRCh38.115.gff3"
-    local HUMAN_FA="$HD/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
+    # ── Human (GRCh38, GIAB HG002) ──
+    local HUMAN_GFF3="$TEST_DATA/Homo_sapiens.GRCh38.115.gff3"
+    local HUMAN_FA="$TEST_DATA/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
+    [[ -f "$HUMAN_GFF3" ]] || HUMAN_GFF3="$ORG_DATA/human/Homo_sapiens.GRCh38.115.gff3"
+    [[ -f "$HUMAN_FA" ]] || HUMAN_FA="$ORG_DATA/human/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
     if [[ -f "$HUMAN_GFF3" ]]; then
         print_section "Pre-warming: Human full genome (GRCh38)"
         warm_cache "$HUMAN_GFF3" "$HUMAN_FA"
-        add_benchmark "human_full" "$HD/human_giab_hg002_full.vcf" "$HUMAN_GFF3" "$HUMAN_FA" "Human"
+        add_benchmark "COLO829v003T.sage.somatic" "$VCF_DATA/COLO829v003T.sage.somatic.vcf" "$HUMAN_GFF3" "$HUMAN_FA" "Sage Somantic"
     fi
+
+    # # ── Arabidopsis (TAIR10) ──
+    # if [[ -f "$ORG_DATA/arabidopsis.gff3" ]]; then
+    #     print_section "Pre-warming: Arabidopsis (TAIR10)"
+    #     warm_cache "$ORG_DATA/arabidopsis.gff3" "$ORG_DATA/arabidopsis.fa"
+    #     add_benchmark "arabidopsis_ensembl" "$VCF_DATA/arabidopsis_ensembl_full.vcf" "$ORG_DATA/arabidopsis.gff3" "$ORG_DATA/arabidopsis.fa" "Arabidopsis"
+    # fi
 
     # ═══════════════════════════════════════════════════════════════
     # RUN ALL BENCHMARKS
@@ -234,18 +285,34 @@ run_benchmarks() {
         local fasta="${ALL_FASTAS[$i]:-}"
         local organism="${ALL_ORGANISMS[$i]}"
         local nvar
-        nvar=$(count_variants "$vcf")
+        if ! nvar=$(count_variants "$vcf" 2>"$LOG_DIR/${name}.count.log"); then
+            echo -e "${RED}ERROR:${NC} failed to count variants for $name" >&2
+            echo -e "${YELLOW}VCF:${NC} $vcf" >&2
+            echo -e "${YELLOW}Log:${NC} $LOG_DIR/${name}.count.log" >&2
+            tail -n 40 "$LOG_DIR/${name}.count.log" >&2
+            return 1
+        fi
+        if [[ "$nvar" -eq 0 ]]; then
+            echo -e "  ${YELLOW}Skipping $name: no variant records in $(basename "$vcf")${NC}"
+            continue
+        fi
 
         printf "  %-25s (%8s variants, %-12s) ... " "$name" "$nvar" "$organism"
         local elapsed
-        elapsed=$(median_time "$RUNS" "$vcf" "$gff" "vcf" "$OUTPUT_DIR/${name}.annotated.vcf" "$fasta")
+        if ! elapsed=$(median_time "$RUNS" "$vcf" "$gff" "vcf" "$OUTPUT_DIR/${name}.annotated.vcf" "$fasta"); then
+            echo -e "${RED}failed${NC}"
+            echo -e "${YELLOW}See logs:${NC} $LOG_DIR/"
+            return 1
+        fi
 
         local vps
-        vps=$(python3 -c "
-e = float('$elapsed')
-n = int('$nvar')
-print(f'{n/e:,.0f}' if e > 0 else 'inf')
-")
+        vps=$(awk -v elapsed="$elapsed" -v nvar="$nvar" 'BEGIN {
+            if (elapsed > 0) {
+                printf "%.0f", nvar / elapsed
+            } else {
+                printf "inf"
+            }
+        }')
         printf "${GREEN}%8s sec${NC}  (%s v/s)\n" "$elapsed" "$vps"
         RESULTS["${name}"]="${elapsed} ${nvar} ${vps} ${organism}"
     done

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Wrapper for Glow Pipe steps — sources /opt/fastvep/.env (see ${} paths there).
+set -euo pipefail
+
+ENV_FILE="${FASTVEP_ENV_FILE:-/opt/fastvep/.env}"
+if [[ ! -f "$ENV_FILE" ]]; then
+    ENV_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.env"
+fi
+
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
+GFF3="${FASTVEP_GFF3:-$GFF3}"
+FASTA="${FASTVEP_FASTA:-$FASTA}"
+TRANSCRIPT_CACHE="${FASTVEP_TRANSCRIPT_CACHE:-${TRANSCRIPT_CACHE:-}}"
+
+has_option() {
+    local long="$1"
+    local short="${2:-}"
+    shift 2 || true
+
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            "$long"|"$long"=*) return 0 ;;
+        esac
+        if [[ -n "$short" && "$arg" == "$short" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+args=("$@")
+
+if ! has_option "--gff3" "" "${args[@]}"; then
+    args+=(--gff3 "$GFF3")
+fi
+
+if ! has_option "--fasta" "" "${args[@]}"; then
+    args+=(--fasta "$FASTA")
+fi
+
+if [[ -n "$TRANSCRIPT_CACHE" && -f "$TRANSCRIPT_CACHE" ]] \
+    && ! has_option "--transcript-cache" "" "${args[@]}"; then
+    args+=(--transcript-cache "$TRANSCRIPT_CACHE")
+fi
+
+if [[ "${FASTVEP_HGVS:-1}" != "0" ]] && ! has_option "--hgvs" "" "${args[@]}"; then
+    args+=(--hgvs)
+fi
+
+exec fastvep annotate "${args[@]}"

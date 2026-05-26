@@ -6,6 +6,7 @@ echtvar/
 
 # Build
 target/
+target-linux/
 .DS_Store
 
 # Conda build artifacts
@@ -14,6 +15,7 @@ conda-bld/
 
 # Large data (downloaded via benchmarks/download_data.sh)
 test_data/
+validation/human/example.vcf
 
 # Test directory (small test files are force-added via git add -f)
 tests/
