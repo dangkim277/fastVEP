@@ -14,7 +14,7 @@ RUN set -eux; \
     test -s /usr/local/bin/fastvep; \
     test -s "$GFF3"; \
     test -s "$FASTA"; \
-    test -s "${FASTA}.fai"; \
+    test -s "$FASTA_FAI"; \
     test -s "$TRANSCRIPT_CACHE"; \
     /usr/local/bin/fastvep --version
 

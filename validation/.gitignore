@@ -10,3 +10,5 @@ mouse/Mus_musculus.*.gff3.gz
 
 # VEP warning files
 *_warnings.txt
+
+*.vcf

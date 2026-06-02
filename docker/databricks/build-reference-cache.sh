@@ -11,7 +11,7 @@ set +a
 FASTVEP="${FASTVEP:-fastvep}"
 [[ -x "$ROOT/fastvep" ]] && FASTVEP="$ROOT/fastvep"
 
-for f in "$GFF3" "$FASTA" "${FASTA}.fai"; do
+for f in "$GFF3" "$FASTA" "$FASTA_FAI"; do
     [[ -f "$f" ]] || { echo "Missing $f — update .env and reference/" >&2; exit 1; }
 done
 
