@@ -1,2 +1,4 @@
-fastvep-annotate text eol=lf
 .env text eol=lf
+fastvep-annotate text eol=lf
+build-reference-cache.sh text eol=lf
+rename-fasta-ensembl-chroms.sh text eol=lf
