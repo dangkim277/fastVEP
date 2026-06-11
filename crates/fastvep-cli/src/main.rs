@@ -24,9 +24,17 @@ enum Commands {
         #[arg(short, long, default_value = "-")]
         output: String,
 
-        /// GFF3 annotation file for transcript models
-        #[arg(long)]
-        gff3: Option<String>,
+        /// GFF3 annotation file(s) for transcript models. May be repeated
+        /// (`--gff3 a.gff3 --gff3 b.gff3`) or passed as a comma-separated
+        /// list to replicate VEP's `--merged` cache (e.g. Ensembl + RefSeq
+        /// in one annotation run). Each value may optionally be prefixed
+        /// with `LABEL=` to control the SOURCE column for that file
+        /// (e.g. `--gff3 Ensembl=ens.gff3 --gff3 RefSeq=refseq.gff3`); if
+        /// no label is given, it is auto-detected from the filename
+        /// (`refseq` / `gcf_` → RefSeq, `ensembl` / `gencode` → Ensembl,
+        /// otherwise the basename is used).
+        #[arg(long, num_args = 1.., value_delimiter = ',')]
+        gff3: Vec<String>,
 
         /// Path to FASTA reference file
         #[arg(long)]
@@ -101,6 +109,25 @@ enum Commands {
         /// Father sample name for trio analysis
         #[arg(long)]
         father: Option<String>,
+
+        /// Path to a gene-panel file (one gene symbol or Ensembl gene ID per
+        /// line; `#` comments and blank lines ignored). When set, tab output
+        /// keeps only rows whose transcript belongs to a gene in the panel.
+        #[arg(long)]
+        gene_list: Option<String>,
+
+        /// Add an explicit REF column to tab output (after the Allele/ALT
+        /// column) so spreadsheets can see REF/ALT side-by-side without
+        /// reparsing the Location string.
+        #[arg(long)]
+        explicit_alleles: bool,
+
+        /// Path to a QC rules TOML file. When set, tab output gains a
+        /// `QC_CLASS` column populated by the first class whose
+        /// INFO-field thresholds the variant satisfies (variant-level,
+        /// no per-sample parsing).
+        #[arg(long)]
+        qc_rules: Option<String>,
     },
 
     /// Launch the web interface for interactive variant annotation
@@ -120,9 +147,11 @@ enum Commands {
 
     /// Build a binary transcript cache for fast startup
     Cache {
-        /// GFF3 annotation file
-        #[arg(long)]
-        gff3: String,
+        /// GFF3 annotation file(s). May be repeated or comma-separated to
+        /// build a merged cache (Ensembl + RefSeq); each value may be
+        /// `LABEL=path` to control the SOURCE column.
+        #[arg(long, num_args = 1.., value_delimiter = ',')]
+        gff3: Vec<String>,
 
         /// Path to FASTA reference file (for pre-building sequences)
         #[arg(long)]
@@ -133,9 +162,13 @@ enum Commands {
         output: String,
     },
 
-    /// Build a supplementary annotation database (.osa) from a source file
+    /// Build a supplementary annotation database (.osa or .osi) from a source file
     SaBuild {
-        /// Source type: clinvar, gnomad, dbsnp
+        /// Source type. Known sources (clinvar, gnomad, dbsnp, …) use their
+        /// dedicated parsers; `custom_vcf` and `custom_bed` accept any
+        /// well-formed VCF/BED file and produce a generic `.osa` or `.osi`
+        /// keyed by `--name`. `custom` is an alias that auto-detects VCF vs
+        /// BED from the input extension.
         #[arg(long)]
         source: String,
 
@@ -143,13 +176,28 @@ enum Commands {
         #[arg(short, long)]
         input: String,
 
-        /// Output base path (will create .osa and .osa.idx)
+        /// Output base path (will create .osa and .osa.idx, or .osi for BED)
         #[arg(short, long)]
         output: String,
 
         /// Genome assembly (e.g., GRCh38)
         #[arg(long, default_value = "GRCh38")]
         assembly: String,
+
+        /// Display + JSON key name for custom_vcf / custom_bed sources.
+        /// Optional — when omitted, the name is derived from the input
+        /// filename (extensions stripped). Ignored for built-in sources.
+        /// Becomes the `json_key` of the resulting database and the
+        /// prefix of the column / INFO field on output.
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Comma-separated list of INFO fields to extract from a custom VCF.
+        /// Empty (default) means "include every INFO key found on each record"
+        /// — useful for quick exploration, but each record's JSON object will
+        /// vary by which INFO keys it carries.
+        #[arg(long, value_delimiter = ',')]
+        info_fields: Vec<String>,
     },
 
     /// Filter annotated VEP output
@@ -195,6 +243,9 @@ fn main() -> Result<()> {
             proband,
             mother,
             father,
+            gene_list,
+            explicit_alleles,
+            qc_rules,
         } => {
             pipeline::run_annotate(pipeline::AnnotateConfig {
                 input,
@@ -214,6 +265,9 @@ fn main() -> Result<()> {
                 proband,
                 mother,
                 father,
+                gene_list,
+                explicit_alleles,
+                qc_rules,
             })?;
         }
         Commands::Cache { gff3, fasta, output } => {
@@ -227,8 +281,17 @@ fn main() -> Result<()> {
             input,
             output,
             assembly,
+            name,
+            info_fields,
         } => {
-            pipeline::run_sa_build(&source, &input, &output, &assembly)?;
+            pipeline::run_sa_build(
+                &source,
+                &input,
+                &output,
+                &assembly,
+                name.as_deref(),
+                &info_fields,
+            )?;
         }
         Commands::Filter {
             input,
