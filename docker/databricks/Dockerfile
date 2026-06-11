@@ -12,7 +12,8 @@ RUN sed -i 's/\r$//' /usr/local/bin/fastvep-annotate /opt/fastvep/.env \
 RUN set -eux; \
     set -a; . /opt/fastvep/.env; set +a; \
     test -s /usr/local/bin/fastvep; \
-    test -s "$GFF3"; \
+    test -s "$GFF3_ENSEMBL"; \
+    test -s "$GFF3_REFSEQ"; \
     test -s "$FASTA"; \
     test -s "$FASTA_FAI"; \
     test -s "$TRANSCRIPT_CACHE"; \

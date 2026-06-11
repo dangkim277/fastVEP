@@ -12,7 +12,8 @@ set -a
 source "$ENV_FILE"
 set +a
 
-GFF3="${FASTVEP_GFF3:-$GFF3}"
+GFF3_ENSEMBL="${FASTVEP_GFF3_ENSEMBL:-${GFF3_ENSEMBL:-${FASTVEP_GFF3:-$GFF3}}}"
+GFF3_REFSEQ="${FASTVEP_GFF3_REFSEQ:-${GFF3_REFSEQ:-}}"
 FASTA="${FASTVEP_FASTA:-$FASTA}"
 TRANSCRIPT_CACHE="${FASTVEP_TRANSCRIPT_CACHE:-${TRANSCRIPT_CACHE:-}}"
 
@@ -36,8 +37,14 @@ has_option() {
 
 args=("$@")
 
+# Merged cache already contains Ensembl + RefSeq — skip --gff3 when cache is present.
 if ! has_option "--gff3" "" "${args[@]}"; then
-    args+=(--gff3 "$GFF3")
+    if [[ -z "$TRANSCRIPT_CACHE" || ! -f "$TRANSCRIPT_CACHE" ]]; then
+        args+=(--gff3 "$GFF3_ENSEMBL")
+        if [[ -n "$GFF3_REFSEQ" && -f "$GFF3_REFSEQ" ]]; then
+            args+=(--gff3 "$GFF3_REFSEQ")
+        fi
+    fi
 fi
 
 if ! has_option "--fasta" "" "${args[@]}"; then
